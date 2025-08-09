@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "초미비니 WordsQuiz",
-    "slug": "wordsquiz-m",
+    "slug": "wordsquizm",
     "version": "1.0.0",
     "orientation": "portrait",
     "android": {
