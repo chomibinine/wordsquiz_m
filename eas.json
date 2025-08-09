@@ -1,19 +1,15 @@
+// eas.json (수정/보완)
 {
   "cli": {
-    "version": ">= 3.21.0"
+    "version": ">= 3.21.0",
+    "appVersionSource": "remote"
   },
   "build": {
     "production": {
-      "android": {
-        "buildType": "app-bundle"
-      }
+      "android": { "buildType": "app-bundle" }
     }
   },
   "submit": {
-    "production": {
-      "android": {
-        "track": "internal"
-      }
-    }
+    "production": { "android": { "track": "internal" } }
   }
 }
