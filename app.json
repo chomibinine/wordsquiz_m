@@ -1,19 +1,17 @@
 {
   "expo": {
-    "name": "초미비니의 WordsQuiz",
+    "name": "초미비니 WordsQuiz",
     "slug": "wordsquiz-m",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
-    "splash": { "image": "./assets/splash.png", "resizeMode": "contain", "backgroundColor": "#ffffff" },
-    "updates": { "enabled": true },
-    "ios": { "supportsTablet": false },
     "android": {
       "package": "com.chomibinine.wordsquizm",
-      "versionCode": 1,
-      "permissions": [ "INTERNET" ]
+      "versionCode": 1
     },
-    "plugins": [],
-    "extra": { "eas": { "projectId": "CHANGE_ME_LATER" } }
+    "extra": {
+      "eas": {
+        "projectId": "16514b4e-ae21-4e32-8dd6-c7b2886bbf90"
+      }
+    }
   }
 }
