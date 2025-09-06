@@ -727,7 +727,126 @@ body {
     transform: translateY(-2px);
     box-shadow: 0 4px 10px rgba(26, 115, 232, 0.2);
 }
+
+/* === Completion Range Styles (from working version, minimal) === */
+#quiz-selection .quiz-range.completed {
+  background-color: #e6f7ec !important;
+  border: 1px solid #22a06b !important;
+  color: #156f3a !important;
+  font-weight: 700 !important;
+}
+label.quiz-range { position: relative; }
+.range-checkmark {
+  position: absolute; right: 8px; top: 50%;
+  transform: translateY(-50%);
+  font-size: 1rem; line-height: 1; pointer-events: none;
+}
+/* === end Completion Range Styles === */
+
 </style>
+
+
+
+
+
+
+<style id="choice-text-clamp-patch">
+/* === Responsive option text sizing, width 95%, fixed height 60px, max 2 lines (v6) === */
+#options-container button {
+  width: 95% !important; 
+  margin: 6px auto !important;
+  padding: 10px 14px !important;
+
+  font-size: clamp(18px, 3vw, 22px) !important;
+  line-height: 1.4 !important;
+  text-align: left !important;
+
+  /* fixed original height */
+  height: 60px !important;
+  box-sizing: border-box !important;
+
+  /* max 2 lines visible */
+  display: -webkit-box !important;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+
+  background-color: #f8f9fa;
+  border: 2px solid #dadce0;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.3s;
+  position: relative;
+}
+</style>
+
+
+
+
+
+
+
+<style id="choice-text-autosize-patch">
+/* Option text auto-resize wrapper */
+#options-container button {
+  width: 95% !important;
+  margin: 6px auto !important;
+  padding: 10px 14px !important;
+  font-size: 20px; /* initial value, will be adjusted by JS */
+  line-height: 1.35 !important;
+  text-align: left !important;
+  height: 60px !important; /* fixed height */
+  box-sizing: border-box !important;
+  background-color: #f8f9fa;
+  border: 2px solid #dadce0;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.3s;
+  position: relative;
+  overflow: hidden; /* clip overflow text */
+}
+
+#options-container button .opt-text {
+  display: block;
+  width: 100%;
+  line-height: 1.35;
+  white-space: normal;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+</style>
+
+
+<style id="praise-autosize-style">
+/* Praise/encouragement box with fixed height */
+#praise-box {
+  width: 100%;
+  height: 88px;              /* fixed box height (tweak as needed) */
+  padding: 10px 12px;
+  box-sizing: border-box;
+  background: #e8f5e9;       /* soft green */
+  border: 2px solid #a5d6a7;
+  border-radius: 12px;
+  text-align: center;
+  overflow: hidden;          /* hide overflow; text will be auto-fitted */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Inner text node that will be auto-fitted */
+#praise-box .praise-text {
+  display: block;
+  width: 100%;
+  font-size: 22px;           /* initial (max) size; JS will reduce if needed */
+  line-height: 1.3;
+  white-space: normal;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+</style>
+
 </head>
 <body>
 <div id="user-message"></div>
@@ -13277,5 +13396,315 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 })();
 </script>
+<script>
+/* === Completion Range Logic (extracted) === */
+
+(function(){
+  if (window.__wbq_range_v11_installed) return;
+  window.__wbq_range_v11_installed = true;
+
+  var RANGE_STATUS_KEY = 'rangeStatus';
+  var KEY_A = 'quizUsers_v1';
+  var KEY_B = 'wbq_userData_v1';
+  var CURRENT_KEY = 'wbq_currentUserId';
+
+  function readJSON(key, fallback){
+    try { return JSON.parse(localStorage.getItem(key) || ''); }
+    catch(e){ return (fallback===undefined?{}:fallback); }
+  }
+  function writeJSON(key, val){
+    try { localStorage.setItem(key, JSON.stringify(val)); } catch(e){}
+  }
+  function getCurrentId(){
+    var id = localStorage.getItem(CURRENT_KEY);
+    if (id) return id;
+    var a = readJSON(KEY_A, {}) || {}; var b = readJSON(KEY_B, {}) || {};
+    id = Object.keys(a)[0] || Object.keys(b)[0] || 'default';
+    localStorage.setItem(CURRENT_KEY, id);
+    return id;
+  }
+  function collectCorrectSet(){
+    var id = getCurrentId();
+    var a = readJSON(KEY_A, {}) || {}; var b = readJSON(KEY_B, {}) || {};
+    var list = []
+      .concat((a[id] && a[id].correct) || [])
+      .concat((b[id] && b[id].correct) || [])
+      .map(function(n){ return parseInt(n,10); })
+      .filter(function(n){ return Number.isFinite(n) && n>=1 && n<=10000; });
+    return new Set(list);
+  }
+
+  function parseRangeKey(text){
+    if (!text) return null;
+    var m = (text+'').replace(/\s+/g,' ').trim().match(/#?\s*(\d{1,4})\s*[~\-]\s*#?\s*(\d{1,4})/);
+    if (!m) return null;
+    var s = parseInt(m[1],10), e = parseInt(m[2],10);
+    if (!Number.isFinite(s) || !Number.isFinite(e)) return null;
+    if (e < s){ var t=s; s=e; e=t; }
+    return s + '-' + e;
+  }
+  function getRangeKeyFromElement(el){
+    if (!el) return null;
+    var ds = el.getAttribute && el.getAttribute('data-range');
+    if (ds) return ds;
+    return parseRangeKey(el.textContent);
+  }
+  function ensureDataRangeOnLabels(){
+    var holder = document.getElementById('quiz-selection');
+    if (!holder) return;
+    holder.querySelectorAll('#quiz-selection *').forEach(function(el){
+      if (!el.getAttribute) return;
+      if (el.hasAttribute('data-range')) return;
+      var key = parseRangeKey(el.textContent || '');
+      if (key) el.setAttribute('data-range', key);
+    });
+  }
+
+  function setMarkForKey(key, done){
+    var holder = document.getElementById('quiz-selection');
+    if (!holder || !key) return;
+    var el = null;
+    holder.querySelectorAll('#quiz-selection *[data-range]').forEach(function(node){
+      if (node.getAttribute('data-range') === key && !el) el = node;
+    });
+    if (!el) return;
+    if (done){
+      el.classList.add('completed');
+      var mk = el.querySelector('.range-checkmark');
+      if (!mk){
+        mk = document.createElement('span');
+        mk.className = 'range-checkmark';
+        mk.textContent = '✅';
+        el.insertAdjacentElement('beforeend', mk);
+      }
+    } else {
+      el.classList.remove('completed');
+      var mk = el.querySelector('.range-checkmark');
+      if (mk) mk.remove();
+    }
+  }
+  function markFromRangeStatus(){
+    var store = readJSON(RANGE_STATUS_KEY, {}) || {};
+    Object.keys(store).forEach(function(k){
+      if (store[k] && store[k].completed) setMarkForKey(k, true);
+    });
+  }
+  function markFromCorrectList(){
+    var set = collectCorrectSet();
+    var holder = document.getElementById('quiz-selection');
+    if (!holder) return;
+    holder.querySelectorAll('#quiz-selection *[data-range]').forEach(function(el){
+      var key = el.getAttribute('data-range');
+      if (!key) return;
+      var parts = key.split('-');
+      if (parts.length !== 2) return;
+      var s = parseInt(parts[0],10), e = parseInt(parts[1],10);
+      if (!Number.isFinite(s) || !Number.isFinite(e)) return;
+      var ok = true;
+      for (var i=s;i<=e;i++){ if (!set.has(i)){ ok=false; break; } }
+      if (ok) setMarkForKey(key, true);
+    });
+  }
+
+  function rememberSelectedRange(){
+    var holder = document.getElementById('quiz-selection');
+    if (!holder) return null;
+    var sel = holder.querySelector('.quiz-range.selected') || (holder.querySelector('.quiz-range input:checked') && holder.querySelector('.quiz-range input:checked').closest('.quiz-range'));
+    if (!sel){
+      var checked = holder.querySelector('input[type="radio"]:checked');
+      if (checked) sel = checked.closest('[data-range]') || checked.closest('label') || checked.closest('.quiz-range');
+    }
+    var key = getRangeKeyFromElement(sel);
+    if (key) window.__wbq_currRangeKey = key;
+    return key;
+  }
+  function detectPerfectByText(){
+    var result = document.getElementById('result-screen');
+    if (!result || result.classList.contains('hidden')) return false;
+    var text = result.textContent || '';
+    var m = text.match(/총\s*(\d+)\s*문제\s*중\s*(\d+)개/);
+    if (m){
+      var total = parseInt(m[1],10), got = parseInt(m[2],10);
+      return Number.isFinite(total) && Number.isFinite(got) && got >= total && total > 0;
+    }
+    var m2 = text.match(/(\d+)\s*\/\s*(\d+)/);
+    if (m2){
+      var g2 = parseInt(m2[1],10), t2 = parseInt(m2[2],10);
+      return Number.isFinite(g2) && Number.isFinite(t2) && g2 >= t2 && t2 > 0;
+    }
+    return false;
+  }
+  function detectPerfectByVars(){
+    var qlen = (Array.isArray(window.currentQuizData) ? window.currentQuizData.length : null);
+    var sc = (typeof window.score !== 'undefined' ? parseInt(window.score,10) : null);
+    if (Number.isFinite(qlen) && Number.isFinite(sc) && sc >= qlen && qlen > 0) return true;
+    return false;
+  }
+  function applySessionCompletionIfPerfect(){
+    var perfect = detectPerfectByText() || detectPerfectByVars();
+    if (!perfect) return;
+    var key = window.__wbq_currRangeKey || rememberSelectedRange();
+    if (!key) return;
+    var store = readJSON(RANGE_STATUS_KEY, {}) || {};
+    if (!store[key] || !store[key].completed){
+      store[key] = { completed:true, ts: Date.now() };
+      writeJSON(RANGE_STATUS_KEY, store);
+    }
+    setMarkForKey(key, true);
+  }
+
+  function refreshAll(){
+    ensureDataRangeOnLabels();
+    markFromRangeStatus();
+    markFromCorrectList();
+  }
+
+  var obs = new MutationObserver(function(){
+    setTimeout(function(){
+      ensureDataRangeOnLabels();
+      applySessionCompletionIfPerfect();
+      refreshAll();
+    }, 30);
+  });
+  obs.observe(document.body, {subtree:true, attributes:true, childList:true, attributeFilter:['class','style']});
+
+  document.addEventListener('click', function(e){
+    var id = e && e.target && e.target.id;
+    if (id === 'start-btn'){ rememberSelectedRange(); }
+    if (id === 'restart-btn' || id === 'retry-incorrect-btn' || id === 'close-settings'){
+      setTimeout(function(){ applySessionCompletionIfPerfect(); refreshAll(); }, 50);
+    }
+  });
+
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', function(){
+      refreshAll(); applySessionCompletionIfPerfect();
+    });
+  } else { refreshAll(); applySessionCompletionIfPerfect(); }
+})();
+
+/* === end Completion Range Logic === */
+</script>
+
+
+<script id="choice-text-wrapper">
+(function(){
+  function wrapOptionText(){
+    document.querySelectorAll('#options-container button').forEach(btn=>{
+      if(!btn.querySelector('.opt-text')){
+        const text = btn.innerHTML.trim();
+        btn.innerHTML = '<span class="opt-text">'+ text +'</span>';
+      }
+    });
+  }
+  window.addEventListener('load', wrapOptionText);
+  const obs = new MutationObserver(wrapOptionText);
+  obs.observe(document.getElementById('options-container') || document.body, {
+    childList:true, subtree:true
+  });
+})();
+</script>
+
+
+<script id="choice-text-autosize-script">
+(function(){
+  const MIN = 14;  // 최소 폰트(px)
+  const BASE = 18; // 기본 폰트(px) - 원래 clamp 최소값
+  const MAX = 22;  // 최대 폰트(px)
+
+  function initialSizeByViewport() {
+    // CSS: clamp(18px, 3vw, 22px) 과 동일한 계산
+    const vwBased = window.innerWidth * 0.03; // 3vw
+    return Math.min(MAX, Math.max(BASE, vwBased));
+  }
+
+  function fitOne(el){
+    const container = el.closest('button');
+    if(!container) return;
+    const targetH = container.clientHeight - 20; // 상하 padding 10+10 보정
+
+    // 1) 뷰포트 기준 초기 폰트 결정 (18px ~ 22px)
+    let size = initialSizeByViewport();
+    el.style.fontSize = size + 'px';
+
+    // 2) 넘치면 1px씩 줄여서 맞추기 (최소 14px까지)
+    let guard = 0;
+    while ((el.scrollHeight > targetH) && size > MIN && guard++ < 60){
+      size--;
+      el.style.fontSize = size + 'px';
+    }
+  }
+
+  function fitAll(){
+    document.querySelectorAll('#options-container button .opt-text')
+      .forEach(fitOne);
+  }
+
+  window.addEventListener('load', fitAll);
+  window.addEventListener('resize', () => requestAnimationFrame(fitAll));
+
+  const obsTarget = document.getElementById('options-container') || document.body;
+  const obs = new MutationObserver(fitAll);
+  obs.observe(obsTarget, {subtree:true, childList:true, characterData:true});
+})();
+</script>
+
+
+
+<script id="praise-autosize-script">
+(function(){
+  const MIN = 14;   // minimum font size
+  const BASE = 18;  // base font size (matches options behavior)
+  const MAX = 22;  // maximum font size
+
+  function initialSizeByViewport() {
+    // Mimic CSS clamp(18px, 3vw, 22px)
+    const vwBased = window.innerWidth * 0.03;
+    return Math.min(MAX, Math.max(BASE, vwBased));
+  }
+
+  function wrapPraiseText(){
+    const box = document.getElementById('praise-box');
+    if (!box) return;
+    if (!box.querySelector('.praise-text')) {
+      const html = box.innerHTML.trim();
+      box.innerHTML = '<span class="praise-text">' + html + '</span>';
+    }
+  }
+
+  function fitPraise(){
+    const el = document.querySelector('#praise-box .praise-text');
+    const box = document.getElementById('praise-box');
+    if (!el || !box) return;
+    const targetH = box.clientHeight - 20; // padding compensation
+
+    // 1) viewport-based initial size (18~22px)
+    let size = initialSizeByViewport();
+    el.style.fontSize = size + 'px';
+
+    // 2) shrink only if overflowing, down to MIN
+    let guard = 0;
+    while ((el.scrollHeight > targetH) && size > MIN && guard++ < 60) {
+      size--;
+      el.style.fontSize = size + 'px';
+    }
+  }
+
+  function fitAllPraise(){
+    wrapPraiseText();
+    fitPraise();
+  }
+
+  window.addEventListener('load', fitAllPraise);
+  window.addEventListener('resize', () => requestAnimationFrame(fitAllPraise));
+
+  // Observe praise box content changes
+  const box = document.getElementById('praise-box');
+  const target = box || document.body;
+  const obs = new MutationObserver(fitAllPraise);
+  obs.observe(target, {childList:true, subtree:true, characterData:true});
+})();
+</script>
+
 </body>
 </html>
