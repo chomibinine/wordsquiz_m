@@ -743,6 +743,23 @@ label.quiz-range { position: relative; }
 }
 /* === end Completion Range Styles === */
 
+
+/* === Auto-size mode: keep box size fixed, let font shrink to fit === */
+#options-container button {
+  height: 60px;            /* fixed button height (adjust if your design differs) */
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: normal;      /* allow wrapping */
+  display: block;
+}
+
+#praise-box {
+  overflow: hidden;
+  white-space: normal;
+  line-height: 1.25;
+}
+
 </style>
 
 
@@ -13703,6 +13720,221 @@ document.addEventListener('DOMContentLoaded', () => {
   const target = box || document.body;
   const obs = new MutationObserver(fitAllPraise);
   obs.observe(target, {childList:true, subtree:true, characterData:true});
+})();
+</script>
+
+
+<script>
+// === Auto font-size fitter (no external deps) ===
+// Shrinks text until it fits within the element's client box (width/height).
+// Keeps box size fixed; never grows it.
+(function() {
+  function px(n){ return Math.max(1, Math.round(n)) + 'px'; }
+
+  function fitText(el, opts) {
+    if (!el) return;
+    const o = Object.assign({
+      min: 12,          // minimum font-size px
+      max: 22,          // maximum starting font-size px
+      step: 1,          // decrement step
+      lines: 2,         // target max visual lines (soft; we check height instead)
+      retry: 2          // extra retries to stabilize after layout
+    }, opts || {});
+
+    // Prepare element for wrapping
+    const style = el.style;
+    const original = {
+      fontSize: window.getComputedStyle(el).fontSize,
+      whiteSpace: el.style.whiteSpace,
+      wordBreak: el.style.wordBreak,
+    };
+    style.whiteSpace = 'normal';
+    style.wordBreak = style.wordBreak || 'keep-all'; // Korean-friendly wrapping
+
+    // Start from max
+    let size = o.max;
+    style.fontSize = px(size);
+
+    // Compute max allowed height based on current box height (fixed by CSS)
+    // If the element doesn't have a fixed height, we derive it from clientHeight after max font applied.
+    let maxH = el.clientHeight;
+    if (!maxH || maxH <= 0) {
+      // fallback: snapshot current height after setting max size
+      maxH = el.getBoundingClientRect().height || 0;
+    }
+
+    // Defensive: if still 0 (display:none etc.), skip
+    if (!maxH) return;
+
+    // Reduce size until the content fits into width & height
+    // We'll loop with an upper bound to avoid infinite loops.
+    let guard = 0;
+    while (guard++ < 200) {
+      // Measure after layout
+      const fitsHeight = el.scrollHeight <= el.clientHeight + 1;
+      const fitsWidth  = el.scrollWidth  <= el.clientWidth  + 1;
+      if (fitsHeight && fitsWidth) break;
+      if (size <= o.min) break;
+      size -= o.step;
+      style.fontSize = px(size);
+    }
+
+    // Stabilize with a couple more checks (some fonts/layout settle after a tick)
+    let retries = o.retry;
+    function stabilize() {
+      const fitsHeight = el.scrollHeight <= el.clientHeight + 1;
+      const fitsWidth  = el.scrollWidth  <= el.clientWidth  + 1;
+      if ((fitsHeight && fitsWidth) || size <= o.min || retries-- <= 0) return;
+      if (!fitsHeight || !fitsWidth) {
+        size = Math.max(o.min, size - o.step);
+        style.fontSize = px(size);
+      }
+      requestAnimationFrame(stabilize);
+    }
+    requestAnimationFrame(stabilize);
+  }
+
+  // Apply autosize to quiz UI
+  function autosizeAll() {
+    try {
+      // 1) Choice buttons
+      document.querySelectorAll('#options-container button').forEach(btn => {
+        fitText(btn, { min: 12, max: 22, step: 1 });
+      });
+      // 2) Praise / encouragement box text
+      const praise = document.getElementById('praise-box');
+      if (praise) fitText(praise, { min: 12, max: 20, step: 1 });
+      // 3) Any element the app marks explicitly
+      document.querySelectorAll('.autosize').forEach(el => {
+        fitText(el, { min: 12, max: 22, step: 1 });
+      });
+    } catch(e) {
+      console.warn('autosizeAll error:', e);
+    }
+  }
+
+  // Observe dynamic content changes (e.g., new question rendered)
+  const ro = new ResizeObserver(() => autosizeAll());
+  window.addEventListener('resize', autosizeAll);
+  document.addEventListener('DOMContentLoaded', () => {
+    // Kick once at start
+    autosizeAll();
+    // Watch key containers for changes
+    const containers = [
+      document.getElementById('options-container'),
+      document.getElementById('praise-box'),
+      document.getElementById('app-container')
+    ].filter(Boolean);
+    containers.forEach(c => ro.observe(c));
+  });
+
+  // Optional: allow the app to manually trigger autosize after it mutates the DOM
+  window.dispatchAutosize = autosizeAll;
+  document.addEventListener('quiz:content-updated', autosizeAll);
+})();
+</script>
+
+
+<script>
+// === WebView-safe TTS layer ===============================================
+// Goals:
+//  - Work in Chrome & Android WebView
+//  - No blocking alerts; fail silently with console hints
+//  - Avoid "language unsupported" popups
+//  - Require a user gesture the first time (button click etc.)
+(function(){
+  const synth = window.speechSynthesis;
+  let cachedVoices = [];
+  let ready = false;
+
+  function loadVoicesWithRetry(maxTries = 12, delay = 250) {
+    return new Promise(resolve => {
+      let tries = 0;
+      function tick() {
+        cachedVoices = synth.getVoices() || [];
+        // Some WebViews populate only after several ticks
+        if (cachedVoices.length || tries >= maxTries) {
+          ready = cachedVoices.length > 0;
+          return resolve(cachedVoices);
+        }
+        tries++;
+        setTimeout(tick, delay);
+      }
+      // Event + polling (event may never fire on WebView)
+      if (typeof synth.onvoiceschanged !== 'undefined') {
+        synth.onvoiceschanged = () => {
+          cachedVoices = synth.getVoices() || [];
+          ready = cachedVoices.length > 0;
+        };
+      }
+      tick();
+    });
+  }
+
+  function pickVoiceFor(langPref) {
+    if (!cachedVoices.length) return null;
+    const pref = (langPref || 'ko-KR').toLowerCase();
+    let v = cachedVoices.find(v => (v.lang || '').toLowerCase() === pref);
+    if (v) return v;
+    const base = pref.split('-')[0]; // e.g., 'ko'
+    v = cachedVoices.find(v => (v.lang || '').toLowerCase().startsWith(base));
+    return v || null;
+  }
+
+  async function speak(text, opts) {
+    try {
+      if (!text) return;
+      await loadVoicesWithRetry();
+      const u = new SpeechSynthesisUtterance(text);
+      const lang = (opts && opts.lang) || 'ko-KR';
+      const v = pickVoiceFor(lang);
+      if (v) {
+        u.voice = v;
+        u.lang = v.lang || lang;
+      } else {
+        // Fallback: set lang only; let engine pick default. No popups.
+        u.lang = lang;
+      }
+      u.rate   = (opts && opts.rate)   || 1.0;
+      u.pitch  = (opts && opts.pitch)  || 1.0;
+      u.volume = (opts && opts.volume) || 1.0;
+
+      // WebView stability: clear any stale queue first
+      synth.cancel();
+      synth.speak(u);
+    } catch (e) {
+      console.warn('[TTS] speak() failed:', e);
+    }
+  }
+
+  // Expose a safe API
+  window.TTS = {
+    speak,
+    preload: loadVoicesWithRetry,
+    ready: () => ready,
+    getVoices: () => (synth.getVoices() || [])
+  };
+
+  // Optional: attach to any element with .speak-on-click and data-tts
+  document.addEventListener('click', (e) => {
+    const t = e.target.closest('.speak-on-click');
+    if (t && t.dataset && t.dataset.tts) {
+      // This ensures user gesture context
+      speak(t.dataset.tts, { lang: t.dataset.lang || 'ko-KR' });
+    }
+  });
+
+  // Add a small hidden test button once (can be shown via CSS if needed)
+  document.addEventListener('DOMContentLoaded', () => {
+    const btn = document.createElement('button');
+    btn.id = 'tts-test-btn';
+    btn.type = 'button';
+    btn.textContent = '🔊 TTS 테스트';
+    btn.style.cssText = 'position:absolute;right:8px;bottom:8px;opacity:.15;z-index:5;font-size:12px;';
+    btn.addEventListener('click', () => speak('안녕하세요. 이 장치는 TTS가 활성화되었습니다.', {lang:'ko-KR'}));
+    // comment out if you never want it appended:
+    document.body.appendChild(btn);
+  });
 })();
 </script>
 
